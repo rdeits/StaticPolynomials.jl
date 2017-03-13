@@ -5,8 +5,7 @@ import Base: *, +, ^, convert, promote_rule, convert, show, isless, literal_pow
 abstract type PolynomialLike end
 abstract type TermLike <: PolynomialLike end
 abstract type MonomialLike <: TermLike end
-abstract type PowerLike <: MonomialLike end
-abstract type VariableLike <: PowerLike end
+abstract type VariableLike <: MonomialLike end
 
 immutable Variable{Name} <: VariableLike
 end
@@ -14,7 +13,7 @@ end
 isless(v1::Variable{N1}, v2::Variable{N2}) where {N1, N2} = isless(N1, N2)
 show(io::IO, v::Variable{Name}) where Name = print(io, Name)
 
-immutable Power{Var} <: PowerLike
+immutable Power{Var}
     exponent::Rational{Int}
 end
 
@@ -35,13 +34,14 @@ function show(io::IO, p::Power)
     end
 end
 
-convert(::Type{<:Power}, v::Variable) = Power{v}(1)
-
 immutable Monomial{Powers} <: MonomialLike
 end
 
-convert(::Type{<:Monomial}, p::Power) = Monomial{(p,)}()
-convert(T::Type{<:Monomial}, p::VariableLike) = convert(T, Power(p))
+@generated function convert(::Type{<:Monomial}, v::V) where {V <: Variable}
+    quote
+        Monomial{$((Power{V()}(1),))}()
+    end
+end
 
 function show(io::IO, m::Monomial{P}) where {P}
     for power in P
@@ -56,7 +56,7 @@ immutable Term{Mono, T} <: TermLike
 end
 
 convert(::Type{<:Term}, mono::M) where {M <: Monomial} = Term{mono}(1)
-convert(T::Type{<:Term}, v::PowerLike) = convert(T, Monomial(v))
+convert(T::Type{<:Term}, v::Variable) = convert(T, Monomial(v))
 
 function show(io::IO, t::Term{Mono, T}) where {Mono, T}
     print(io, t.coefficient, Mono)
@@ -167,5 +167,33 @@ end
 (*)(t1::TermLike, t2::TermLike) = Term(t1) * Term(t2)
 (*)(x::Number, m::Monomial) = x * Term(m)
 
+@generated function subs(m::Term{Mono, T}, s::Pair{Variable{N}, T2}) where {Mono, T, N, T2}
+    coeff = :(m.coefficient)
+    remaining = []
+    for p in powers(Mono)
+        if variable(p) == Variable{N}()
+            coeff = Expr(:call, :*, coeff, :(s.second ^ $(exponent(p))))
+        else
+            push!(remaining, p)
+        end
+    end
+    if isempty(remaining)
+        coeff
+    else
+        quote
+            Term{$(Monomial{Tuple(remaining)}())}($coeff)
+        end
+    end
+end
+
+@generated function subs(m::Term, s::Vararg{<: Pair, N}) where {N}
+    expr = :(m)
+    for j in 1:N
+        expr = Expr(:call, :subs, expr, :(s[$j]))
+    end
+    expr
+end
+
+(m::Term)(args...) = subs(m, args...)
 
 end
