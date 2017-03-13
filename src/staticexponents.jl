@@ -1,6 +1,6 @@
 module sp
 
-import Base: *, +, ^, convert, promote_rule, convert, show, isless
+import Base: *, +, ^, convert, promote_rule, convert, show, isless, literal_pow
 
 abstract type PolynomialLike end
 abstract type TermLike <: PolynomialLike end
@@ -80,13 +80,7 @@ function show(io::IO, p::Polynomial)
     end
 end
 
-@generated function (^)(v::V, ::Val{x}) where {V <: Variable, x}
-    quote
-        Monomial{$((Power{V()}(x),))}()
-    end
-end
-
-@generated function (^)(v::V, ::Type{Val{x}}) where {V <: Variable, x}
+@generated function literal_pow(^, v::V, ::Type{Val{x}}) where {V <: Variable, x}
     quote
         Monomial{$((Power{V()}(x),))}()
     end
