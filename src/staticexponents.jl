@@ -57,6 +57,7 @@ end
 
 convert(::Type{<:Term}, mono::M) where {M <: Monomial} = Term{mono}(1)
 convert(T::Type{<:Term}, v::Variable) = convert(T, Monomial(v))
+convert(::Type{<:Term}, x::Number) = Term{Monomial{tuple()}()}(x)
 
 function show(io::IO, t::Term{Mono, T}) where {Mono, T}
     print(io, t.coefficient, Mono)
@@ -160,6 +161,8 @@ end
 (+)(t1::PolynomialLike, t2::PolynomialLike) = convert(Polynomial, t1) + convert(Polynomial, t2)
 (+)(t1::Term{P, T1}, t2::Term{P, T2}) where {P, T1, T2} = Term{P}(t1.coefficient + t2.coefficient)
 (+)(v1::MonomialLike, v2::MonomialLike) = Term(v1) + Term(v2)
+(+)(m::TermLike, x::Number) = m + Term(x)
+(+)(x::Number, m::TermLike) = Term(x) + m
 (*)(x::Number, t::T) where {T <: Term} = T(x * t.coefficient)
 (*)(t::T, x::Number) where {T <: Term} = T(t.coefficient * x)
 (*)(x::Number, m::MonomialLike) = x * Term(m)
@@ -194,6 +197,13 @@ end
     expr
 end
 
+@generated function subs(p::Polynomial{Terms}, s::Vararg{<:Pair, N}) where {N, Terms}
+    Expr(:call, :+, [:(subs(p.terms[$i], s...)) for i in 1:length(Terms.parameters)]...)
+end
+
+subs(x::Number, s...) = x
+
+(m::Polynomial)(args...) = subs(m, args...)
 (m::Term)(args...) = subs(m, args...)
 
 end
