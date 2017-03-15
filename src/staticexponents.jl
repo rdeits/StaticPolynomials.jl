@@ -1,6 +1,8 @@
 module sp
 
-import Base: *, +, ^, convert, promote_rule, convert, show, isless, literal_pow
+import Base: *, +, ^,
+    convert, promote_rule, convert, show, isless, literal_pow,
+    one, copy
 
 abstract type PolynomialLike end
 abstract type TermLike <: PolynomialLike end
@@ -9,6 +11,9 @@ abstract type VariableLike <: MonomialLike end
 
 immutable Variable{Name} <: VariableLike
 end
+
+one(v::Variable) = Monomial{tuple()}()
+copy(v::Variable) = v
 
 isless(v1::Variable{N1}, v2::Variable{N2}) where {N1, N2} = isless(N1, N2)
 show(io::IO, v::Variable{Name}) where Name = print(io, Name)
@@ -145,12 +150,17 @@ end
 
 @generated function *(t1::Term{M1, T1}, t2::Term{M2, T2}) where {M1, M2, T1, T2}
     p = Any[powers(M1)...]
-    for power in powers(M2)
-        i = indexin([power], p)[1]
-        if i != 0
-            p[i] = Power{variable(p[i])}(exponent(p[i]) + exponent(power))
-        else
-            push!(p, power)
+    for p2 in powers(M2)
+        matched = false
+        for (i, p1) in enumerate(powers(M1))
+            if variable(p2) == variable(p1)
+                p[i] = Power{variable(p[i])}(exponent(p[i]) + exponent(p2))
+                matched = true
+                break
+            end
+        end
+        if !matched
+            push!(p, p2)
         end
     end
     quote
