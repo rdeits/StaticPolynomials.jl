@@ -1,7 +1,40 @@
 module sp
 
 using StaticArrays: SVector
+import StaticArrays: push, setindex
 import Base: *, +, ^, promote_rule, convert, show, isless, size, getindex
+
+immutable QuasiStatic{N, T} <: AbstractVector{T}
+    data::SVector{N, T}
+    length::Int
+
+    function QuasiStatic{N, T}() where {N, T}
+        data = SVector{N, T}(ntuple(_ -> T(), Val{N}))
+        new{N, T}(data, 0)
+    end
+    QuasiStatic{N, T}(data::SVector{N, T}, length=N) where {N, T} = new{N, T}(data, length)
+end
+
+
+function QuasiStatic{N}(data::SVector{M, T}) where {N, M, T}
+    q = QuasiStatic{N, T}()
+    for d in data
+        q = push(q, d)
+    end
+    q
+end
+
+QuasiStatic(data::SVector{M, T}, length=M) where {M, T} = QuasiStatic{M, T}(data, length)
+
+
+@inline getindex(v::QuasiStatic, i) = (@boundscheck (i >= 1 && i <= v.length) || throw(BoundsError()); v.data[i])
+size(v::QuasiStatic) = (v.length,)
+function push(v::QuasiStatic{N}, x) where {N}
+    if v.length >= N
+        error("Capacity reached")
+    end
+    QuasiStatic(setindex(v.data, x, v.length + 1), v.length + 1)
+end
 
 abstract type PolynomialLike end
 abstract type TermLike <: PolynomialLike end
@@ -11,12 +44,6 @@ abstract type VariableLike <: MonomialLike end
 immutable Variable{Name} <: VariableLike
 end
 
-@generated function isless(::Variable{N1}, ::Variable{N2}) where {N1, N2}
-    quote
-        $(N1 < N2)
-    end
-end
-
 show(io::IO, v::Variable{Name}) where Name = print(io, Name)
 
 immutable Monomial{N, V} <: MonomialLike
@@ -24,17 +51,7 @@ immutable Monomial{N, V} <: MonomialLike
 end
 
 exponents(m::Monomial) = m.exponents
-
-@generated function isless(m1::Monomial{N1, V1}, m2::Monomial{N2, V2}) where {N1, V1, N2, V2}
-    if V1 < V2
-        :(true)
-    elseif V1 > V2
-        :(false)
-    else
-        :(exponents(m1) < exponents(m2))
-    end
-end
-
+isless(m1::Monomial, m2::Monomial) = variables(m1) < variables(m2) && exponents(m1) < exponents(m2)
 format_exponent(e) = e == 1 ? "" : "^$e"
 
 function show(io::IO, m::Monomial)
@@ -88,11 +105,13 @@ immutable Polynomial{T <: Term, V <: AbstractVector{T}} <: PolynomialLike
 end
 
 Polynomial(terms::V) where {T <: Term, V <: AbstractVector{T}} = Polynomial{T, V}(terms)
-convert(T::Type{<:Polynomial}, t::Term) = T(SVector(t))
+convert(T::Type{<:Polynomial}, t::Term) = T(QuasiStatic(SVector(t)))
 convert(T::Type{<:Polynomial}, m::Monomial) = T(Term(m))
 convert(T::Type{<:Polynomial}, v::Variable) = T(Term(v))
 
-convert(T::Type{Polynomial{T1, V1}}, p::Polynomial) where {T1, V1} = T(convert(V1, p.terms))
+# convert(T::Type{Polynomial{T, V1}}, p::Polynomial{T, V2}) where {T, V1, V2} = T(convert(V1, p.terms))
+
+convert(T::Type{Polynomial{T1, V1}}, p::Polynomial{T2, V2}) where {T1, T2, V1, V2} = T(convert(V1, p.terms))
 
 function show(io::IO, p::Polynomial)
     if !isempty(p.terms)
@@ -124,7 +143,7 @@ function promote_rule(::Type{<:PolynomialLike}, ::Type{<:PolynomialLike})
 end
 
 @generated function promote_rule(::Type{Polynomial{T1, V1}}, ::Type{Polynomial{T2, V2}}) where {T1, T2, V1, V2}
-    termtype = promote_type(T1, T2)
+    termtype = promote_rule(T1, T2)
     quote
         Polynomial{$termtype, Vector{$termtype}}
     end
@@ -136,70 +155,48 @@ end
 
 function (+)(t1::Term{T, Mono}, t2::Term{T, Mono}) where {T, Mono}
     if t1.monomial < t2.monomial
-        Polynomial([t1, t2])
+        Polynomial(QuasiStatic(SVector(t1, t2)))
     elseif t1.monomial > t2.monomial
-        Polynomial([t2, t1])
+        Polynomial(QuasiStatic(SVector(t2, t1)))
     else
-        Polynomial([Term{T, Mono}(t1.coefficient + t2.coefficient, t1.monomial)])
+        terms = QuasiStatic{2, Term{T, Mono}}()
+        terms = push(terms, Term{T, Mono}(t1.coefficient + t2.coefficient, t1.monomial))
+        Polynomial(terms)
+        # Polynomial([Term{T, Mono}(t1.coefficient + t2.coefficient, t1.monomial)])
     end
 end
 
-# function simplify!(terms::AbstractVector{<:Term}, start::Integer)
-#     i1 = 1
-#     i2 = start
-#     while i1 <= start && i2 <= length(terms)
-#         t1 = terms[i1]
-#         t2 = terms[i2]
-#         if t1.monomial < t2.monomial
-#             i1 += 1
-#         elseif t1.monomial > t2.monomial
-#             i2 += 1
-#         else
-#             terms[i1] = Term(t1.coefficient + t2.coefficient, t1.monomial)
-#             deleteat!(terms, i2)
-#             i1 += 1
-#         end
-#     end
-#     sort!(terms; by=t -> t.monomial)
-# end
-
-
-function jointerms(t1::AbstractArray{<:Term}, t2::AbstractArray{<:Term})
-    terms = Vector{promote_type(eltype(t1), eltype(t2))}(length(t1) + length(t2))
-    i = 1
-    i1 = 1
-    i2 = 1
-    deletions = 0
-    while i1 <= length(t1) && i2 <= length(t2)
-        if t1[i1].monomial < t2[i2].monomial
-            terms[i] = t1[i1]
-            i1 += 1
-        elseif t1[i1].monomial > t2[i2].monomial
-            terms[i] = t2[i2]
-            i2 += 1
-        else
-            terms[i] = Term(t1[i1].coefficient + t2[i2].coefficient,
-                             t1[i1].monomial)
-            i1 += 1
-            i2 += 1
-            deletions += 1
+@generated function (+)(p1::Polynomial{T1, QuasiStatic{N1, T1}}, p2::Polynomial{T2, QuasiStatic{N2, T2}}) where {T1, N1, T2, N2}
+    T = promote_type(T1, T2)
+    Q = QuasiStatic{N1 + N2, T}
+    quote
+        terms = $Q()
+        i1 = 1
+        i2 = 1
+        while i1 <= length(p1.terms) && i2 <= length(p2.terms)
+            t1 = convert($T, p1.terms[i1])
+            t2 = convert($T, p2.terms[i2])
+            if t1.monomial < t2.monomial
+                terms = push(terms, t1)
+                i1 += 1
+            elseif t1.monomial > t2.monomial
+                terms = push(terms, t2)
+                i2 += 1
+            else
+                terms = push(terms, $T(t1.coefficient + t2.coefficient,
+                             t1.monomial))
+                i1 += 1
+                i2 += 1
+            end
         end
-        i += 1
+        for i in i1:length(p1.terms)
+            terms = push(terms, p1.terms[i])
+        end
+        for i in i2:length(p2.terms)
+            terms = push(terms, p2.terms[i])
+        end
+        Polynomial(terms)
     end
-    for j in i1:length(t1)
-        terms[i] = t1[j]
-        i += 1
-    end
-    for j in i2:length(t2)
-        terms[i] = t2[j]
-        i += 1
-    end
-    resize!(terms, length(terms) - deletions)
-end
-
-
-function (+)(p1::Polynomial{T1, V1}, p2::Polynomial{T2, V2}) where {T1, V1, T2, V2}
-    Polynomial(jointerms(p1.terms, p2.terms))
 end
 
 @generated function (*)(m1::Monomial{N1, V1}, m2::Monomial{N2, V2}) where {N1, V1, N2, V2}
