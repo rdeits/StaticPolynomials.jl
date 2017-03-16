@@ -28,7 +28,8 @@ immutable Term{T, MonomialType <: Monomial} <: TermLike
     coefficient::T
     monomial::MonomialType
 end
-(::Type{TermType})() where {T, N, V, TermType <: Term{T, Monomial{N, V}}} = TermType(0, Monomial{N, V}())
+Term(m::TermLike) = convert(Term, m)
+Term(x::T) where {T} = Term{T, Monomial{0, tuple()}}(x, Monomial{0, tuple()}())
 
 variables(::Type{Term{T, M}}) where {T, M} = variables(M)
 variables(t::Term) = variables(typeof(t))
@@ -44,11 +45,11 @@ variables(p::Polynomial) = variables(typeof(p))
 
 convert(::Type{<:Monomial}, v::Variable{Name}) where {Name} = Monomial{1, (Name,)}((1,))
 convert(T::Type{<:Term}, m::Monomial) = T(1, m)
-convert(T::Type{<:Term}, v::Variable) = T(Monomial(v))
-convert(::Type{Term{T, M}}, x) where {T, M} = Term{T, M}(convert(T, x), M())
+convert(T::Type{<:Term}, v::Variable) = convert(T, Monomial(v))
+convert(T::Type{Term{T1, M1}}, x) where {T1, M1} = T(convert(T1, x), M1())
 convert(T::Type{<:Polynomial}, t::Term) = T(SVector(t))
-convert(T::Type{<:Polynomial}, m::Monomial) = T(Term(m))
-convert(T::Type{<:Polynomial}, v::Variable) = T(Term(v))
+convert(T::Type{<:Polynomial}, x::TermLike) = convert(T, Term(x))
+convert(T::Type{Polynomial{T1, V1}}, x) where {T1, V1} = convert(T, Term(x))
 convert(T::Type{Polynomial{T1, V1}}, p::Polynomial) where {T1, V1} = T(convert(V1, p.terms))
 
 @generated function convert(::Type{Term{T1, Mono1}}, t::Term{T2, Mono2}) where {T1, Mono1, T2, Mono2}
@@ -90,6 +91,7 @@ end
     end
 end
 
+isless(t1::Term, t2::Term) = t1.monomial < t2.monomial
 
 show(io::IO, v::Variable{Name}) where Name = print(io, Name)
 function show(io::IO, t::Term)
@@ -98,7 +100,10 @@ function show(io::IO, t::Term)
     elseif t.coefficient == 1
         print(io, t.monomial)
     else
-        print(io, t.coefficient, t.monomial)
+        print(io, t.coefficient)
+        if !all(t.monomial.exponents .== 0)
+            print(io, t.monomial)
+        end
     end
 end
 
@@ -194,27 +199,22 @@ function jointerms(terms1::AbstractArray{<:Term}, terms2::AbstractArray{<:Term})
     resize!(terms, length(terms) - deletions)
 end
 
-function (+)(v1::Variable{Name}, v2::Variable{Name}) where {Name}
-    Term(v1) + Term(v2)
-end
-
-function (+)(t1::Term{T, Mono}, t2::Term{T, Mono}) where {T, Mono}
+function (+)(term1::T1, term2::T2) where {T1 <: Term, T2 <: Term}
+    t1, t2 = promote(term1, term2)
     if t1.monomial < t2.monomial
         Polynomial([t1, t2])
     elseif t1.monomial > t2.monomial
         Polynomial([t2, t1])
     else
-        Polynomial([Term{T, Mono}(t1.coefficient + t2.coefficient, t1.monomial)])
+        Polynomial([(t1.coefficient + t2.coefficient, t1.monomial)])
     end
 end
 
-function (+)(p1::Polynomial{T1, V1}, p2::Polynomial{T2, V2}) where {T1, V1, T2, V2}
-    Polynomial(jointerms(p1.terms, p2.terms))
-end
-
-(+)(m1::Monomial, m2::Monomial) = Term(m1) + Term(m2)
+(+)(p1::Polynomial, p2::Polynomial) = Polynomial(jointerms(p1.terms, p2.terms))
+(+)(t1::TermLike, t2::TermLike) = Term(t1) + Term(t2)
 (+)(t1::PolynomialLike, t2::PolynomialLike) = +(promote(t1, t2)...)
-
+(+)(p::PolynomialLike, x::Any) = p + Polynomial(Term(x))
+(+)(x::Any, p::PolynomialLike) = Polynomial(Term(x)) + p
 
 @generated function (*)(m1::Monomial{N1, V1}, m2::Monomial{N2, V2}) where {N1, V1, N2, V2}
     vars = Tuple(sort(collect(union(Set(V1), Set(V2)))))
@@ -290,6 +290,7 @@ end
 
 function subs_partial(p::Polynomial, s::NTuple{N, Pair{<:Variable}}) where N
     newterms = [subs(t, s) for t in p.terms]
+    sort!(newterms)
     Polynomial(newterms)
 end
 
