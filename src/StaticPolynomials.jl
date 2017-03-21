@@ -31,82 +31,59 @@ end
 one(v::Variable) = Monomial{tuple()}()
 copy(v::Variable) = v
 
-isless(v1::Variable{N1}, v2::Variable{N2}) where {N1, N2} = isless(N1, N2)
-show(io::IO, v::Variable{Name}) where Name = print(io, Name)
-
 immutable Power{Var}
     exponent::Rational{Int}
 end
+Power(v::Variable) = Power{v}(1)
 
 variable(::Power{V}) where {V} = V
 exponent(p::Power) = p.exponent
-isless(p1::Power{V1}, p2::Power{V2}) where {V1, V2} = (V1, p1.exponent) < (V2, p2.exponent)
-
-function show(io::IO, p::Power)
-    print(io, variable(p))
-    d = denominator(exponent(p))
-    n = numerator(exponent(p))
-    if d == 1
-        if n != 1
-            print(io, "^", n)
-        end
-    else
-        print(io, "^(", exponent(p), ")")
-    end
-end
 
 immutable Monomial{Powers} <: MonomialLike
 end
-
-@generated function convert(::Type{<:Monomial}, v::V) where {V <: Variable}
-    quote
-        Monomial{$((Power{V()}(1),))}()
-    end
+@generated function Monomial(v::Variable)
+    :(Monomial{$((Power{(v())}(1),))}())
 end
 
-@generated function variables(::Type{Monomial{P}}) where {P}
-    :($(variable.(P)))
+powers(::Type{Monomial{Powers}}) where {Powers} = Powers
+powers(m::Monomial) = powers(typeof(m))
+
+@generated function variables(::Type{M}) where {M <: Monomial}
+    :($(variable.(powers(M))))
 end
 
 variables(m::Monomial) = variables(typeof(m))
 
-function show(io::IO, m::Monomial{P}) where {P}
-    for power in P
-        show(io, power)
-    end
-end
 
 immutable Term{Mono, T} <: TermLike
     coefficient::T
-    Term{Mono}(c::T) where{Mono, T} = new{Mono, T}(c)
-    Term{Mono, T}(c::T) where{Mono, T} = new{Mono, T}(c)
 end
+Term(m::M, x::T) where {M <: Monomial, T} = Term{M(), T}(x)
+Term(v::Variable) = Term(Monomial(v), 1)
+Term(m::Monomial) = Term(m, 1)
+Term(x) = Term(Monomial{tuple()}(), x)
 
-convert(::Type{<:Term}, mono::M) where {M <: Monomial} = Term{mono}(1)
-convert(T::Type{<:Term}, v::Variable) = convert(T, Monomial(v))
-convert(::Type{<:Term}, x::Number) = Term{Monomial{tuple()}()}(x)
-
-function show(io::IO, t::Term{Mono, T}) where {Mono, T}
-    print(io, t.coefficient, Mono)
-end
-
-immutable Polynomial{Terms <: Tuple} <: PolynomialLike
+immutable Polynomial{Terms <: Tuple{Vararg{<:Term}}} <: PolynomialLike
     terms::Terms
 end
+Polynomial(t::Term) = Polynomial((t,))
+Polynomial(x) = Polynomial(Term(x))
 
-convert(::Type{<:Polynomial}, t::Term) = Polynomial((t,))
-convert(T::Type{<:Polynomial}, m::MonomialLike) = convert(T, convert(Term, m))
+isless(::Type{Variable{N1}}, ::Type{Variable{N2}}) where {N1, N2} = N1 < N2
+isless(v1::Variable, v2::Variable) = typeof(v1) < typeof(v2)
 
-function show(io::IO, p::Polynomial)
-    if length(p.terms) == 0
-        print(io, "0")
+@generated function promote_rule(::Type{V1}, ::Type{V2}) where {V1 <: Variable, V2 <: Variable}
+    M1 = Monomial{(Power{V1()}(1),)}()
+    M2 = Monomial{(Power{V2()}(1),)}()
+    if M1 < M2
+        :(Polynomial{Tuple{Term{$M1, Int}, Term{$M2, Int}}})
     else
-        print(io, p.terms[1])
-        for t in p.terms[2:end]
-            print(io, " + ", t)
-        end
+        :(Polynomial{Tuple{Term{$M2, Int}, Term{$M1, Int}}})
     end
 end
+
+@generated function promote_rule(::Type{V}, ::Type{M}) where {V <: Variable, M <: Monomial}
+    
 
 @generated function literal_pow(^, v::V, ::Type{Val{x}}) where {V <: Variable, x}
     quote
@@ -142,7 +119,6 @@ end
 #     end
 # end
 #
-powers(::Monomial{P}) where {P} = P
 powers(::Type{Term{M, T}}) where {M, T} = powers(M)
 
 function add_impl(::Type{Polynomial{Terms1}}, ::Type{Polynomial{Terms2}}) where {Terms1, Terms2}
@@ -237,5 +213,7 @@ subs(x::Number, s...) = x
 
 (m::Polynomial)(args...) = subs(m, args...)
 (m::Term)(args...) = subs(m, args...)
+
+include("show.jl")
 
 end
